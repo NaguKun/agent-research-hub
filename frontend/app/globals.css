@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+  body {
+    @apply bg-[#0f1729] text-slate-200;
+    background-image: 
+      radial-gradient(circle at 50% 50%, rgba(17, 24, 39, 0.5) 0%, transparent 100%),
+      linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+  }
+}
+
+.prose {
+  @apply text-slate-300 font-sans;
+}
+
+.prose strong {
+  @apply text-white font-semibold;
+}
+
+.prose h1, .prose h2, .prose h3 {
+  @apply text-white font-bold mt-4 mb-2 tracking-tight;
+}
+
+.prose code {
+  @apply bg-indigo-500/10 px-1.5 py-0.5 rounded text-indigo-400 font-mono text-[0.9em] border border-indigo-500/20;
+}
+
+.prose pre {
+  @apply bg-[#1a2235] p-4 rounded-lg border border-white/10 overflow-x-auto font-mono text-xs leading-relaxed shadow-2xl;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Tech Animations */
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.scanline::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: rgba(79, 70, 229, 0.1);
+  animation: scanline 8s linear infinite;
+  pointer-events: none;
+  z-index: 50;
+}
+
+/* Terminal-like text */
+.font-terminal {
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
