@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Annotated, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -128,18 +128,59 @@ class DonePayload(BaseModel):
     total_events: int = 0
 
 
+# ── Payload Union (typed discriminated payloads) ─────────────────
+EventPayload = Union[
+    SessionStartPayload,
+    ThinkingPayload,
+    ToolStartPayload,
+    ToolEndPayload,
+    SubAgentStartPayload,
+    SubAgentEndPayload,
+    AgentResponsePayload,
+    AskUserPayload,
+    AskUserAnsweredPayload,
+    FinalMessagePayload,
+    ErrorPayload,
+    DonePayload,
+]
+
+# Map event_type → payload class for validation
+PAYLOAD_TYPE_MAP: dict[str, type[BaseModel]] = {
+    EventType.SESSION_START: SessionStartPayload,
+    EventType.THINKING: ThinkingPayload,
+    EventType.TOOL_START: ToolStartPayload,
+    EventType.TOOL_END: ToolEndPayload,
+    EventType.SUB_AGENT_START: SubAgentStartPayload,
+    EventType.SUB_AGENT_END: SubAgentEndPayload,
+    EventType.AGENT_RESPONSE: AgentResponsePayload,
+    EventType.ASK_USER: AskUserPayload,
+    EventType.ASK_USER_ANSWERED: AskUserAnsweredPayload,
+    EventType.FINAL_MESSAGE: FinalMessagePayload,
+    EventType.ERROR: ErrorPayload,
+    EventType.DONE: DonePayload,
+}
+
+
 # ── Unified Event Envelope ───────────────────────────────────────
 class AgentEvent(BaseModel):
     """
     Single envelope for every event in the agent stream.
     The `event_type` discriminator tells the consumer which payload shape to expect.
+    Payload is typed: each event_type maps to a specific payload model.
     """
     event_id: str = Field(default_factory=_uuid)
     event_type: EventType
     timestamp: datetime = Field(default_factory=_now)
     agent_context: AgentContext
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: EventPayload
     run_id: str = Field(default="", description="Groups events belonging to the same agent run")
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
+
+    def payload_dict(self) -> dict[str, Any]:
+        """Return the payload as a plain dict (for SSE serialization)."""
+        if isinstance(self.payload, BaseModel):
+            return self.payload.model_dump()
+        return self.payload  # type: ignore
+

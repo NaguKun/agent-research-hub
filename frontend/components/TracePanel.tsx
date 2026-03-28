@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useStore, TraceNode as TraceNodeType, AgentStatus } from '@/lib/store';
+import { useStore, TraceNode as TraceNodeType, Artifact } from '@/lib/store';
 import { api } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
 import { 
@@ -15,153 +15,183 @@ import {
   Cpu,
   Wrench,
   MessageSquare,
+  Check,
+  X,
+  Compass,
   FileText
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
-const StatusIcon = ({ status }: { status: AgentStatus }) => {
+const StatusMarker = ({ status }: { status: string }) => {
   switch (status) {
-    case 'completed': return <CheckCircle2 size={14} className="text-emerald-400" />;
-    case 'running': return <PlayCircle size={14} className="text-indigo-400 animate-pulse" />;
-    case 'failed': return <XCircle size={14} className="text-red-400" />;
-    case 'waiting_for_user': return <HelpCircle size={14} className="text-amber-400" />;
-    default: return <Circle size={14} className="text-slate-600" />;
+    case 'running': return <div className="w-4 h-4 rounded-full bg-indigo-100 flex items-center justify-center"><div className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-ping" /></div>;
+    case 'completed': return <div className="w-4 h-4 rounded-full bg-emerald-100 flex items-center justify-center"><Check size={10} className="text-emerald-600" /></div>;
+    case 'failed': return <div className="w-4 h-4 rounded-full bg-red-100 flex items-center justify-center"><X size={10} className="text-red-600" /></div>;
+    case 'waiting_for_user': return <div className="w-4 h-4 rounded-full bg-amber-100 flex items-center justify-center"><div className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse" /></div>;
+    default: return <div className="w-4 h-4 rounded-full bg-slate-100" />;
   }
 };
 
-const TraceNode = ({ nodeId, depth = 0 }: { nodeId: string; depth?: number }) => {
-  const node = useStore((state) => state.traceNodes[nodeId]);
-  const [isExpanded, setIsExpanded] = useState(true);
+const ChildrenGroup = ({ childIds, depth }: { childIds: string[]; depth: number }) => {
+  const { traceNodes } = useStore();
 
+  // Detect parallel execution: children sharing the same parent that are both 'running' 
+  // or were running simultaneously (both have no ended_at yet, or same-name agents)
+  const children = childIds.map(id => traceNodes[id]).filter(Boolean);
+
+  // Group by agent_name to detect parallel instances of the same agent type
+  const nameCounts: Record<string, number> = {};
+  children.forEach(c => { nameCounts[c.name] = (nameCounts[c.name] || 0) + 1; });
+  const hasParallelInstances = Object.values(nameCounts).some(count => count >= 2);
+
+  // Also detect: multiple siblings currently running at the same time
+  const runningCount = children.filter(c => c.status === 'running').length;
+  const isParallel = hasParallelInstances || runningCount >= 2;
+
+  if (isParallel) {
+    return (
+      <div className="space-y-2">
+        {/* Parallel execution indicator */}
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-violet-50 border border-dashed border-violet-300 rounded-xl">
+          <div className="flex items-center gap-1.5">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="text-violet-600">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+            <span className="text-[9px] font-bold text-violet-700 uppercase tracking-[0.15em]">
+              Parallel Execution
+            </span>
+          </div>
+          <span className="text-[9px] font-bold text-violet-500 bg-violet-100 px-2 py-0.5 rounded-full ml-auto">
+            {children.length} agents
+          </span>
+        </div>
+
+        {/* Parallel children rendered in a grid */}
+        <div className="grid grid-cols-1 gap-2 pl-2 border-l-2 border-dashed border-violet-200">
+          {childIds.map((childId) => (
+            <TraceNode key={childId} nodeId={childId} depth={depth + 1} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Sequential (non-parallel) — render normally
+  return (
+    <div className="space-y-3">
+      {childIds.map((childId) => (
+        <TraceNode key={childId} nodeId={childId} depth={depth + 1} />
+      ))}
+    </div>
+  );
+};
+
+const TraceNode = ({ nodeId, depth = 0 }: { nodeId: string; depth?: number }) => {
+  const { traceNodes } = useStore();
+  const [isExpanded, setIsExpanded] = useState(true);
+  const node = traceNodes[nodeId];
   if (!node) return null;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
+      {/* Node Header */}
       <div 
-        className={clsx(
-          "group flex items-center gap-3 py-1.5 px-2 rounded transition-all duration-150 cursor-pointer border",
-          node.status === 'running' ? "bg-indigo-500/5 border-indigo-500/30" : "hover:bg-white/5 border-transparent"
-        )}
         onClick={() => setIsExpanded(!isExpanded)}
+        className={clsx(
+          "group flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all border",
+          node.status === 'running' 
+            ? "bg-indigo-50/50 border-indigo-200 shadow-[0_0_15px_rgba(99,102,241,0.1)]" 
+            : "bg-white border-slate-200 hover:border-indigo-300 hover:shadow-md"
+        )}
       >
         <div className="flex items-center gap-2 shrink-0">
           {node.children.length > 0 ? (
-            isExpanded ? <ChevronDown size={12} className="text-slate-600" /> : <ChevronRight size={12} className="text-slate-600" />
+            isExpanded ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />
           ) : (
-            <div className="w-3" />
+            <div className="w-3.5" />
           )}
-          <StatusIcon status={node.status} />
+          <StatusMarker status={node.status} />
         </div>
         
         <div className="flex-1 min-w-0 flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex flex-col min-w-0">
             <span className={clsx(
-              "text-[11px] font-mono truncate",
-              node.status === 'running' ? "text-indigo-300" : "text-slate-300"
+              "text-xs font-bold truncate leading-none",
+              node.status === 'running' ? "text-indigo-700" : "text-slate-900"
             )}>
               {node.name}
             </span>
-            <span className="text-[8px] font-mono text-slate-600 uppercase tracking-tighter shrink-0">
-              [{node.role}]
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+              {node.role.replace('_', ' ')}
             </span>
           </div>
           {node.status === 'running' && (
-            <div className="flex gap-0.5">
-              <div className="w-0.5 h-2 bg-indigo-500/40 animate-pulse" />
-              <div className="w-0.5 h-2 bg-indigo-500/40 animate-pulse delay-75" />
-              <div className="w-0.5 h-2 bg-indigo-500/40 animate-pulse delay-150" />
+            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-indigo-100 rounded-full">
+              <div className="w-1 h-1 rounded-full bg-indigo-600 animate-pulse" />
+              <span className="text-[8px] font-bold text-indigo-600 uppercase">Active</span>
             </div>
           )}
         </div>
       </div>
 
       {isExpanded && (
-        <div className="ml-3 pl-3 border-l border-white/5 space-y-4 py-2">
-          {/* Thinking Steps */}
-          {node.thinking.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-[8px] font-mono font-bold text-slate-600 uppercase tracking-widest">
-                <Cpu size={10} />
-                <span>LOG_THOUGHTS</span>
-              </div>
-              <div className="space-y-1">
-                {node.thinking.map((text, i) => (
-                  <div key={i} className="text-[10px] font-mono text-slate-400 leading-relaxed bg-slate-900/30 p-2 rounded border border-white/10">
-                    <span className="text-indigo-500/40 mr-2">[{i.toString().padStart(2, '0')}]</span>
-                    {text}
+        <div className={clsx(
+          "space-y-4 pt-1",
+          depth >= 0 ? "ml-6 pl-4 border-l border-slate-100" : ""
+        )}>
+          {/* Content Card (only if it has content) */}
+          {(node.thinking.length > 0 || node.tools.length > 0 || node.response) && (
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-4">
+              {node.thinking.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[9px] font-bold text-indigo-500 uppercase tracking-widest flex items-center gap-2">
+                    <Cpu size={12} />
+                    <span>Thought Process</span>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                  <p className="text-[11px] text-slate-600 leading-relaxed italic border-l-2 border-indigo-200 pl-3">
+                    {node.thinking[node.thinking.length - 1]}
+                  </p>
+                </div>
+              )}
 
-          {/* Tool Calls */}
-          {node.tools.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-[8px] font-mono font-bold text-slate-600 uppercase tracking-widest">
-                <Wrench size={10} />
-                <span>LOG_TOOLS</span>
-              </div>
-              <div className="space-y-2">
-                {node.tools.map((tool) => (
-                  <div key={tool.id} className="text-[10px] font-mono border border-white/10 rounded bg-slate-900/50 overflow-hidden">
-                    <div className="flex items-center justify-between px-2 py-1 bg-white/10 border-b border-white/10">
-                      <span className="text-indigo-400 text-[9px]">{tool.name}()</span>
-                      <div className="flex items-center gap-2">
-                        <span className={clsx(
-                          "text-[8px] uppercase font-bold",
-                          tool.status === 'running' ? "text-indigo-400 animate-pulse" : 
-                          tool.status === 'error' ? "text-red-400" : "text-emerald-400"
-                        )}>
-                          {tool.status}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="p-2 space-y-2">
-                      <div className="space-y-1">
-                        <span className="text-[8px] text-slate-600 uppercase font-bold">ARGS</span>
-                        <pre className="text-[9px] text-slate-300 overflow-x-auto custom-scrollbar bg-slate-900/30 p-1.5 rounded border border-white/10">
-                          {JSON.stringify(tool.input, null, 2)}
-                        </pre>
-                      </div>
-                      {tool.output && (
-                        <div className="space-y-1">
-                          <span className="text-[8px] text-slate-600 uppercase font-bold">RETURN</span>
-                          <pre className={clsx(
-                            "text-[9px] overflow-x-auto custom-scrollbar bg-slate-900/30 p-1.5 rounded border border-white/10",
-                            tool.status === 'error' ? "text-red-400/60" : "text-emerald-400/60"
-                          )}>
-                            {JSON.stringify(tool.output, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
+              {node.tools.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                    <Wrench size={12} />
+                    <span>Tool Activity</span>
                   </div>
-                ))}
-              </div>
+                  <div className="flex flex-wrap gap-2">
+                    {node.tools.map((t, i) => (
+                      <div key={i} className={clsx(
+                        "px-2.5 py-1 rounded-lg text-[10px] font-bold border flex items-center gap-1.5",
+                        t.status === 'completed' ? "bg-emerald-50 border-emerald-100 text-emerald-700" : 
+                        t.status === 'error' ? "bg-red-50 border-red-100 text-red-700" :
+                        "bg-white border-slate-200 text-slate-500"
+                      )}>
+                        {t.status === 'running' ? <div className="w-1 h-1 rounded-full bg-indigo-400 animate-pulse" /> : 
+                         t.status === 'error' ? <X size={8} /> : <Check size={8} />}
+                        {t.name}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {node.response && (
+                <div className="space-y-1.5 pt-2 border-t border-slate-200/50">
+                  <div className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest flex items-center gap-2">
+                    <MessageSquare size={12} />
+                    <span>Resolution</span>
+                  </div>
+                  <p className="text-[11px] text-slate-800 leading-relaxed font-medium">{node.response}</p>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Agent Response */}
-          {node.response && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-[8px] font-mono font-bold text-slate-600 uppercase tracking-widest">
-                <MessageSquare size={10} />
-                <span>LOG_RESPONSE</span>
-              </div>
-              <div className="text-[10px] font-mono text-slate-400 bg-indigo-500/5 border border-indigo-500/10 p-2.5 rounded leading-relaxed">
-                {node.response}
-              </div>
-            </div>
-          )}
-
-          {/* Children */}
+          {/* Nested Children — with parallel execution detection */}
           {node.children.length > 0 && (
-            <div className="space-y-1 pt-1">
-              {node.children.map((childId) => (
-                <TraceNode key={childId} nodeId={childId} depth={depth + 1} />
-              ))}
-            </div>
+            <ChildrenGroup childIds={node.children} depth={depth} />
           )}
         </div>
       )}
@@ -170,93 +200,95 @@ const TraceNode = ({ nodeId, depth = 0 }: { nodeId: string; depth?: number }) =>
 };
 
 export function TracePanel() {
-  const { rootNodeIds, artifacts, activeSessionId } = useStore();
-  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
-  const [artifactContent, setArtifactContent] = useState<string | null>(null);
+  const { 
+    rootNodeIds, 
+    artifacts, 
+    activeSessionId, 
+    setSelectedArtifact, 
+    setSelectedArtifactContent 
+  } = useStore();
 
-  const handleViewArtifact = async (id: string) => {
-    if (!activeSessionId) return;
-    setSelectedArtifact(id);
-    const content = await api.sessions.getArtifactContent(activeSessionId, id);
-    setArtifactContent(content);
+  const handleOpenArtifact = async (art: Artifact) => {
+    setSelectedArtifact(art);
+    setSelectedArtifactContent('Loading artifact content...');
+    try {
+      const content = await api.sessions.getArtifactContent(activeSessionId!, art.artifact_id);
+      setSelectedArtifactContent(content);
+    } catch (err) {
+      setSelectedArtifactContent('Failed to load artifact.');
+    }
   };
 
   return (
-    <div className="w-96 border-l border-white/10 bg-[#131b2e]/80 backdrop-blur-2xl flex flex-col h-full overflow-hidden relative">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_100%_100%,rgba(79,70,229,0.03)_0%,transparent_50%)] pointer-events-none" />
-      
-      <div className="p-6 border-b border-white/5 relative z-10">
-        <h2 className="text-[10px] font-bold uppercase tracking-[0.3em] text-slate-500 font-mono">System_Trace_Log</h2>
+    <div className="w-[500px] border-l border-slate-200 bg-slate-50/50 flex flex-col h-full overflow-hidden relative z-20">
+      <div className="p-8 pb-6 bg-white border-b border-slate-200 shadow-sm">
+        <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400 mb-1">Process Navigation</h2>
+        <h3 className="text-sm font-bold text-slate-900">Execution Timeline</h3>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar relative z-10">
+      <div className="flex-1 overflow-y-auto px-8 py-10 custom-scrollbar relative">
         {rootNodeIds.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-700 space-y-3">
-            <Cpu size={20} className="opacity-10" />
-            <p className="text-[10px] font-mono uppercase tracking-widest">Idle_State</p>
+          <div className="h-full flex flex-col items-center justify-center text-slate-300 space-y-6 opacity-60">
+            <div className="w-20 h-20 rounded-3xl bg-white border border-slate-200 shadow-xl flex items-center justify-center">
+              <Compass size={32} className="text-slate-200 animate-spin-slow" />
+            </div>
+            <div className="text-center">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400">System Idle</p>
+              <p className="text-[10px] text-slate-300 mt-2">Waiting for a new research run...</p>
+            </div>
           </div>
         ) : (
-          rootNodeIds.map((id) => <TraceNode key={id} nodeId={id} />)
+          <div className="space-y-6">
+            {rootNodeIds.map((id) => <TraceNode key={id} nodeId={id} />)}
+          </div>
+        )}
+
+        {/* Artifacts List */}
+        {artifacts.length > 0 && (
+          <div className="mt-12 pt-8 border-t border-slate-200">
+            <div className="flex items-center justify-between mb-6 px-1">
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Generated Deliverables</h4>
+              <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-full">{artifacts.length} files</span>
+            </div>
+            <div className="grid gap-3">
+              {artifacts.map((art) => {
+                const isReport = art.filename === 'final_report.md';
+                const isAnalysis = art.filename === 'data_analysis.md';
+                const iconBg = isReport ? 'bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600' 
+                  : isAnalysis ? 'bg-amber-50 text-amber-600 group-hover:bg-amber-600'
+                  : 'bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600';
+                
+                return (
+                  <button
+                    key={art.artifact_id}
+                    onClick={() => handleOpenArtifact(art)}
+                    className={clsx(
+                      "flex items-center gap-4 p-4 bg-white border rounded-2xl hover:shadow-md transition-all group text-left",
+                      isReport ? "border-indigo-200 hover:border-indigo-300" : "border-slate-200 hover:border-indigo-300"
+                    )}
+                  >
+                    <div className={clsx(
+                      "w-10 h-10 rounded-xl flex items-center justify-center shrink-0 group-hover:text-white transition-colors",
+                      iconBg
+                    )}>
+                      <FileText size={18} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-900 truncate">{art.title}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">{art.filename}</span>
+                        <span className="text-[8px] text-slate-300">•</span>
+                        <span className="text-[9px] font-bold text-indigo-400 bg-indigo-50 px-1.5 py-0.5 rounded">{art.agent_name}</span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
 
-      {artifacts.length > 0 && (
-        <div className="p-4 border-t border-white/10 bg-slate-900/50 relative z-10">
-          <h3 className="text-[8px] font-mono font-bold uppercase tracking-[0.2em] text-slate-600 mb-3 px-2">Generated_Assets</h3>
-          <div className="space-y-1.5">
-            {artifacts.map((art) => (
-              <button
-                key={art.artifact_id}
-                onClick={() => handleViewArtifact(art.artifact_id)}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded bg-white/[0.02] border border-white/5 hover:bg-white/[0.05] hover:border-white/10 transition-all text-left group"
-              >
-                <div className="w-7 h-7 rounded bg-emerald-500/5 border border-emerald-500/20 flex items-center justify-center shrink-0 group-hover:border-emerald-500/40 transition-colors">
-                  <FileText size={14} className="text-emerald-500/60" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] font-mono text-slate-300 truncate">{(art as any).filename || art.title}</p>
-                  <p className="text-[8px] font-mono text-slate-600 uppercase tracking-tighter">{(art as any).content_type || art.type}</p>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Artifact Modal */}
-      {selectedArtifact && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-12 bg-black/90 backdrop-blur-md animate-in fade-in">
-          <div className="bg-[#0f1729] border border-white/15 rounded-lg w-full max-w-5xl max-h-full flex flex-col shadow-[0_0_100px_rgba(0,0,0,0.5)] overflow-hidden relative">
-            <div className="absolute top-0 left-0 w-full h-1 bg-indigo-500/30" />
-            
-            <div className="p-6 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
-              <div className="flex items-center gap-3">
-                <FileText size={18} className="text-indigo-400" />
-                <h2 className="text-sm font-mono font-bold text-white uppercase tracking-widest">Asset_Viewer: {selectedArtifact}</h2>
-              </div>
-              <button 
-                onClick={() => setSelectedArtifact(null)}
-                className="p-2 hover:bg-white/5 rounded transition-colors text-slate-500 hover:text-white"
-              >
-                <XCircle size={20} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
-              <div className="prose prose-invert prose-indigo max-w-none prose-sm font-sans">
-                <ReactMarkdown>{artifactContent || 'FETCHING_DATA...'}</ReactMarkdown>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
-  );
-}
-
-function Loader2({ size, className }: { size: number; className?: string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
   );
 }

@@ -137,13 +137,23 @@ export function StreamConsumer() {
     eventTypes.forEach(type => {
       es.addEventListener(type, (e: any) => {
         try {
+          if (!e.data || e.data === 'undefined') {
+            console.warn(`[SSE] Received empty or undefined data for event: ${type}`);
+            return;
+          }
           const data = JSON.parse(e.data);
           handleEvent(type, data);
         } catch (err) {
-          console.error('Error parsing SSE data', err);
+          console.error(`[SSE] Error parsing data for event: ${type}`, err, 'Raw data:', e.data);
         }
       });
     });
+
+    const handleKeepAlive = (e: any) => {
+      // Keep-alive events are just to keep the connection open
+      // No action needed
+    };
+    es.addEventListener('keepalive', handleKeepAlive);
 
     es.onerror = (e) => {
       console.error('SSE Error', e);

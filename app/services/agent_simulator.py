@@ -18,6 +18,18 @@ from app.models.events import (
     AgentRole,
     AgentStatus,
     EventType,
+    SessionStartPayload,
+    ThinkingPayload,
+    ToolStartPayload,
+    ToolEndPayload,
+    SubAgentStartPayload,
+    SubAgentEndPayload,
+    AgentResponsePayload,
+    AskUserPayload,
+    AskUserAnsweredPayload,
+    FinalMessagePayload,
+    DonePayload,
+    ErrorPayload,
 )
 from app.models.sessions import Artifact
 from app.services.artifact_store import artifact_store
@@ -43,7 +55,7 @@ async def _emit_thinking(emitter: EventEmitter, ctx: AgentContext, text: str) ->
     await emitter.emit(AgentEvent(
         event_type=EventType.THINKING,
         agent_context=ctx,
-        payload={"text": text},
+        payload=ThinkingPayload(text=text),
     ))
     await _delay(0.4)
 
@@ -60,13 +72,13 @@ async def _emit_tool(
     await emitter.emit(AgentEvent(
         event_type=EventType.TOOL_START,
         agent_context=ctx,
-        payload={"tool_use_id": tool_use_id, "tool_name": tool_name, "input_data": input_data},
+        payload=ToolStartPayload(tool_use_id=tool_use_id, tool_name=tool_name, input_data=input_data),
     ))
     await _delay(delay)
     await emitter.emit(AgentEvent(
         event_type=EventType.TOOL_END,
         agent_context=ctx,
-        payload={"tool_use_id": tool_use_id, "tool_name": tool_name, "output_data": output_data, "is_error": False},
+        payload=ToolEndPayload(tool_use_id=tool_use_id, tool_name=tool_name, output_data=output_data, is_error=False),
     ))
     return tool_use_id
 
@@ -75,7 +87,7 @@ async def _emit_response(emitter: EventEmitter, ctx: AgentContext, text: str) ->
     await emitter.emit(AgentEvent(
         event_type=EventType.AGENT_RESPONSE,
         agent_context=ctx,
-        payload={"text": text},
+        payload=AgentResponsePayload(text=text),
     ))
     await _delay(0.2)
 
@@ -101,11 +113,11 @@ async def _simulate_web_researcher(
     await emitter.emit(AgentEvent(
         event_type=EventType.SUB_AGENT_START,
         agent_context=parent_ctx,
-        payload={
-            "child_agent_id": agent_id,
-            "child_agent_name": "web-researcher",
-            "task_description": f"Research: {subtopic}",
-        },
+        payload=SubAgentStartPayload(
+            child_agent_id=agent_id,
+            child_agent_name="web-researcher",
+            task_description=f"Research: {subtopic}",
+        ),
     ))
 
     # Thinking
@@ -154,12 +166,12 @@ async def _simulate_web_researcher(
     await emitter.emit(AgentEvent(
         event_type=EventType.SUB_AGENT_END,
         agent_context=parent_ctx,
-        payload={
-            "child_agent_id": agent_id,
-            "child_agent_name": "web-researcher",
-            "status": AgentStatus.COMPLETED,
-            "summary": f"Researched {subtopic} and produced structured notes.",
-        },
+        payload=SubAgentEndPayload(
+            child_agent_id=agent_id,
+            child_agent_name="web-researcher",
+            status=AgentStatus.COMPLETED,
+            summary=f"Researched {subtopic} and produced structured notes.",
+        ),
     ))
 
 
@@ -179,11 +191,11 @@ async def _simulate_data_analyst(
     await emitter.emit(AgentEvent(
         event_type=EventType.SUB_AGENT_START,
         agent_context=parent_ctx,
-        payload={
-            "child_agent_id": agent_id,
-            "child_agent_name": "data-analyst",
-            "task_description": "Analyze research notes and extract key metrics",
-        },
+        payload=SubAgentStartPayload(
+            child_agent_id=agent_id,
+            child_agent_name="data-analyst",
+            task_description="Analyze research notes and extract key metrics",
+        ),
     ))
 
     await _emit_thinking(emitter, ctx, "Reading all research notes... Extracting key metrics and comparisons.")
@@ -227,12 +239,12 @@ async def _simulate_data_analyst(
     await emitter.emit(AgentEvent(
         event_type=EventType.SUB_AGENT_END,
         agent_context=parent_ctx,
-        payload={
-            "child_agent_id": agent_id,
-            "child_agent_name": "data-analyst",
-            "status": AgentStatus.COMPLETED,
-            "summary": "Analyzed research notes and produced metrics summary with comparison tables.",
-        },
+        payload=SubAgentEndPayload(
+            child_agent_id=agent_id,
+            child_agent_name="data-analyst",
+            status=AgentStatus.COMPLETED,
+            summary="Analyzed research notes and produced metrics summary with comparison tables.",
+        ),
     ))
 
 
@@ -253,11 +265,11 @@ async def _simulate_report_writer(
     await emitter.emit(AgentEvent(
         event_type=EventType.SUB_AGENT_START,
         agent_context=parent_ctx,
-        payload={
-            "child_agent_id": agent_id,
-            "child_agent_name": "report-writer",
-            "task_description": "Synthesize all research and data into final report",
-        },
+        payload=SubAgentStartPayload(
+            child_agent_id=agent_id,
+            child_agent_name="report-writer",
+            task_description="Synthesize all research and data into final report",
+        ),
     ))
 
     await _emit_thinking(emitter, ctx, "Reading all research notes and data analysis... Synthesizing into a comprehensive report.")
@@ -313,12 +325,12 @@ async def _simulate_report_writer(
     await emitter.emit(AgentEvent(
         event_type=EventType.SUB_AGENT_END,
         agent_context=parent_ctx,
-        payload={
-            "child_agent_id": agent_id,
-            "child_agent_name": "report-writer",
-            "status": AgentStatus.COMPLETED,
-            "summary": "Synthesized all research into a comprehensive research brief with citations.",
-        },
+        payload=SubAgentEndPayload(
+            child_agent_id=agent_id,
+            child_agent_name="report-writer",
+            status=AgentStatus.COMPLETED,
+            summary="Synthesized all research into a comprehensive research brief with citations.",
+        ),
     ))
 
 
@@ -351,7 +363,7 @@ async def run_agent_simulation(
         await emitter.emit(AgentEvent(
             event_type=EventType.SESSION_START,
             agent_context=lead_ctx,
-            payload={"session_id": session_id, "message": user_message},
+            payload=SessionStartPayload(session_id=session_id, message=user_message),
         ))
         total_events += 1
 
@@ -370,16 +382,16 @@ async def run_agent_simulation(
         await emitter.emit(AgentEvent(
             event_type=EventType.ASK_USER,
             agent_context=lead_ctx,
-            payload={
-                "question": (
+            payload=AskUserPayload(
+                question=(
                     "What angle matters most for this research?\n"
                     "- Technical capabilities\n"
                     "- Developer adoption\n"
                     "- Enterprise readiness\n"
                     "- Funding and market position"
                 ),
-                "prompt_id": prompt_id,
-            },
+                prompt_id=prompt_id,
+            ),
         ))
         total_events += 1
 
@@ -391,7 +403,7 @@ async def run_agent_simulation(
         await emitter.emit(AgentEvent(
             event_type=EventType.ASK_USER_ANSWERED,
             agent_context=lead_ctx,
-            payload={"prompt_id": prompt_id, "answer": user_answer},
+            payload=AskUserAnsweredPayload(prompt_id=prompt_id, answer=user_answer),
         ))
         total_events += 1
 
@@ -447,15 +459,15 @@ async def run_agent_simulation(
         await emitter.emit(AgentEvent(
             event_type=EventType.FINAL_MESSAGE,
             agent_context=lead_ctx,
-            payload={
-                "text": (
+            payload=FinalMessagePayload(
+                text=(
                     f"Research complete! I've compiled a comprehensive brief on '{user_message}'.\n\n"
                     f"**Artifacts produced:**\n"
                     + "\n".join(f"- {a.filename} (by {a.agent_name})" for a in artifact_list)
                     + "\n\nYou can view the full report in the artifacts panel."
                 ),
-                "artifact_ids": artifact_ids,
-            },
+                artifact_ids=artifact_ids,
+            ),
         ))
         total_events += 1
 
@@ -463,7 +475,7 @@ async def run_agent_simulation(
         await emitter.emit(AgentEvent(
             event_type=EventType.DONE,
             agent_context=lead_ctx,
-            payload={"run_id": run_id, "total_events": total_events},
+            payload=DonePayload(run_id=run_id, total_events=total_events),
         ))
 
     except Exception as e:
@@ -471,5 +483,5 @@ async def run_agent_simulation(
         await emitter.emit(AgentEvent(
             event_type=EventType.ERROR,
             agent_context=lead_ctx,
-            payload={"message": str(e), "code": "SIMULATION_ERROR", "recoverable": False},
+            payload=ErrorPayload(message=str(e), code="SIMULATION_ERROR", recoverable=False),
         ))

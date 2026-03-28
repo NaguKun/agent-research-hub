@@ -48,6 +48,8 @@ export interface Artifact {
   artifact_id: string;
   title: string;
   type: string;
+  filename: string;
+  agent_name: string;
 }
 
 interface AppState {
@@ -61,6 +63,8 @@ interface AppState {
   activeAgentName: string | null;
   pendingQuestion: { question: string; prompt_id: string } | null;
   agentMode: 'mock' | 'real';
+  selectedArtifact: Artifact | null;
+  selectedArtifactContent: string | null;
   
   // Actions
   setSessions: (sessions: Session[]) => void;
@@ -81,6 +85,9 @@ interface AppState {
   setPendingQuestion: (q: { question: string; prompt_id: string } | null) => void;
   setAgentMode: (mode: 'mock' | 'real') => void;
   resetRunState: () => void;
+  syncData: (traceTree: any, messages: Message[], artifacts: Artifact[]) => void;
+  setSelectedArtifact: (art: Artifact | null) => void;
+  setSelectedArtifactContent: (content: string | null) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -94,9 +101,21 @@ export const useStore = create<AppState>((set) => ({
   activeAgentName: null,
   pendingQuestion: null,
   agentMode: 'mock',
+  selectedArtifact: null,
+  selectedArtifactContent: null,
 
   setSessions: (sessions) => set({ sessions }),
-  setActiveSessionId: (id) => set({ activeSessionId: id, messages: [], traceNodes: {}, rootNodeIds: [], artifacts: [], pendingQuestion: null, isRunning: false }),
+  setActiveSessionId: (id) => set({ 
+    activeSessionId: id, 
+    messages: [], 
+    traceNodes: {}, 
+    rootNodeIds: [], 
+    artifacts: [], 
+    pendingQuestion: null, 
+    isRunning: false,
+    selectedArtifact: null,
+    selectedArtifactContent: null
+  }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
   updateMessage: (id, updates) => set((state) => ({
@@ -181,4 +200,86 @@ export const useStore = create<AppState>((set) => ({
   setPendingQuestion: (q) => set({ pendingQuestion: q }),
   setAgentMode: (mode) => set({ agentMode: mode }),
   resetRunState: () => set({ traceNodes: {}, rootNodeIds: [], artifacts: [], pendingQuestion: null, isRunning: false, activeAgentName: null }),
+
+  syncData: (traceTree, messages, artifacts) => set((state) => {
+    if (!traceTree || !traceTree.node_id) {
+      return { messages, artifacts };
+    }
+
+    const flatNodes: Record<string, TraceNode> = {};
+    const rootIds: string[] = [];
+
+    const flatten = (node: any) => {
+      const newNode: TraceNode = {
+        id: node.node_id,
+        name: node.agent_name,
+        role: node.role,
+        status: node.status,
+        thinking: node.events
+          .filter((e: any) => e.event_type === 'thinking')
+          .map((e: any) => e.payload.text),
+        tools: node.events
+          .filter((e: any) => e.event_type === 'tool_start' || e.event_type === 'tool_end')
+          .reduce((acc: any[], e: any) => {
+            if (e.event_type === 'tool_start') {
+              acc.push({
+                id: e.payload.tool_use_id,
+                name: e.payload.tool_name,
+                input: e.payload.input_data,
+                status: 'running',
+              });
+            } else {
+              const tool = acc.find((t) => t.id === e.payload.tool_use_id);
+              if (tool) {
+                tool.output = e.payload.output_data;
+                tool.status = e.payload.is_error ? 'error' : 'completed';
+              }
+            }
+            return acc;
+          }, []),
+        response: node.events.find((e: any) => e.event_type === 'agent_response')?.payload.text,
+        children: node.children.map((c: any) => c.node_id),
+        parent_id: node.parent_node_id,
+        summary: node.summary,
+      };
+
+      flatNodes[newNode.id] = newNode;
+      node.children.forEach(flatten);
+    };
+
+    flatten(traceTree);
+    rootIds.push(traceTree.node_id);
+
+    // Also check for pending questions in the whole tree
+    let pendingQ = null;
+    const allEvents = Object.values(flatNodes).flatMap(n => (n as any).events || []); 
+    // Wait, the events are already on the traceTree nodes. 
+    // Let's search the flatNodes (we need to preserve events in the TraceNode interface if we want to search them here, 
+    // or just search while flattening).
+
+    const findPending = (node: any) => {
+      const askEvent = node.events.find((e: any) => e.event_type === 'ask_user');
+      if (askEvent && node.status === 'waiting_for_user') {
+        pendingQ = { question: askEvent.payload.question, prompt_id: askEvent.payload.prompt_id };
+      }
+      node.children.forEach(findPending);
+    };
+    findPending(traceTree);
+
+    // activeAgentName
+    const activeNode = Object.values(flatNodes).find(n => n.status === 'running');
+
+    return { 
+      traceNodes: flatNodes, 
+      rootNodeIds: rootIds, 
+      messages, 
+      artifacts,
+      pendingQuestion: pendingQ,
+      activeAgentName: activeNode?.name || state.activeAgentName,
+      isRunning: traceTree.status === 'running' || traceTree.status === 'waiting_for_user'
+    };
+  }),
+
+  setSelectedArtifact: (art) => set({ selectedArtifact: art }),
+  setSelectedArtifactContent: (content) => set({ selectedArtifactContent: content }),
 }));
