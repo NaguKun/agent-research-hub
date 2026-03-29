@@ -1,286 +1,378 @@
-# Capstone Project: Agent-Transparent Chat Application
+# Deep Analyst — Agent-Transparent Chat Application
 
-## Purpose
-
-Build a working chat application that gives users full transparency into what AI agents are doing under the hood. The app must decode and render agent execution events in real time — thinking steps, tool calls, sub-agent orchestration, parallel execution, user prompts, and artifacts.
-
-You cannot build this without understanding how the Claude Agent SDK emits events, how to stream them to a browser, and how to decode nested agent contexts into a coherent UI.
+> A real-time research intelligence platform that gives users full transparency into multi-agent AI execution. Built as Domain A ("Deep Analyst") for the Agent-Transparent Chat capstone.
 
 ---
 
-## What You're Really Being Tested On
+## Table of Contents
 
-The domain is a vehicle. These are the real skills:
-
-| Skill | Why it matters |
-|-------|---------------|
-| **Agent event decoding** | You must parse a stream of agent lifecycle events and map each to the correct agent context in a nested tree |
-| **Real-time stream consumption** | You must consume a long-lived event stream, handle disconnects, and incrementally build state — not fetch a single JSON response |
-| **Nested agent context routing** | Every event carries context about which agent emitted it. You must route events to the correct node in a tree that grows during the run |
-| **Parallel execution visualization** | When the orchestrator dispatches two sub-agents concurrently, your UI must show both running simultaneously — not sequentially |
-| **Interactive agent flow** | The agent can pause mid-run to ask the user a question. Your app must surface this, collect the answer, send it back, and resume |
-| **Artifact collection** | Agents produce output files. Your UI must collect these from tool outputs and present them coherently |
-| **State management under streaming** | Chat messages, trace trees, agent statuses, and pending questions all update simultaneously from one event stream. Your state management must handle this cleanly |
-
----
-
-## Choose Your Domain
-
-Pick one. Both exercise the same technical requirements.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Setup Instructions](#setup-instructions)
+- [Running the Application](#running-the-application)
+- [Usage Guide](#usage-guide)
+- [Agent Execution Flow](#agent-execution-flow)
+- [Event Decoding & Routing](#event-decoding--routing)
+- [Testing](#testing)
+- [Known Limitations](#known-limitations)
 
 ---
 
-### Domain A: "Deep Analyst" — Research Intelligence Platform
+## Overview
 
-**Scenario:** The user provides a research topic — a company, a person, a stock, a market trend, a technology. A lead research agent breaks this into parallel research streams, each handled by a specialist sub-agent. The results are synthesized into a comprehensive research brief.
+Deep Analyst is a full-stack chat application that streams and visualizes multi-agent AI execution events in real time. When a user submits a research query, the system:
 
-**Why this domain works for agent decode:**
+1. **Orchestrates** a lead analyst agent that decomposes the query
+2. **Pauses** to ask the user for clarification (ask_user flow)
+3. **Fans out** 3 parallel web-researcher sub-agents
+4. **Sequences** a data-analyst and report-writer after researchers complete
+5. **Streams** every event (thinking, tool calls, sub-agent lifecycle) to the browser via SSE
+6. **Builds** a nested trace tree in the UI showing exactly which agent did what
 
-The research pattern is the canonical multi-agent orchestration problem. Anthropic's own SDK demos use it. The lead agent decomposes a question, spawns researchers in parallel, waits for all of them, then synthesizes. This naturally exercises parallel sub-agents, sequential-after-parallel flows, artifact generation (research notes, charts, reports), and ask_user for scoping ambiguous queries.
+The application supports two execution modes:
+- **Mock mode** — Pre-scripted simulation with realistic delays (no API key needed)
+- **Real mode** — Actual Claude API calls via the Anthropic SDK
 
-**Agent Architecture:**
+---
 
-| Agent | Role | What it does |
-|-------|------|-------------|
-| `lead-analyst` | Orchestrator | Receives the research request. Decomposes it into 2-4 subtopics. Dispatches specialist sub-agents. Never does research directly — only coordinates and synthesizes. |
-| `web-researcher` | Sub-agent (spawned per subtopic) | Searches the web for information on its assigned subtopic. Saves structured findings as markdown notes. Multiple instances run in parallel. |
-| `data-analyst` | Sub-agent | Reads the research notes produced by the web researchers. Extracts key metrics, comparisons, and data points. Generates summary tables or charts. |
-| `report-writer` | Sub-agent | Reads all research notes and data analysis. Produces the final research brief as a formatted document. |
-
-**Execution flow for a typical query:**
+## Architecture
 
 ```
-User: "Research Anthropic's competitive position in the AI agent framework market"
-
-  ◆ lead-analyst (running)
-    ... thinking
-    [?] ask_user: "What angle matters most — technical capabilities,
-                   developer adoption, enterprise readiness, or funding?"
-    ... (paused)
-
-  [User answers: "developer adoption and enterprise readiness"]
-
-    > web-researcher: "AI agent frameworks landscape" || parallel
-    > web-researcher: "Anthropic developer adoption metrics" || parallel
-    > web-researcher: "Enterprise AI agent deployments" || parallel
-    > data-analyst (after researchers complete)
-    > report-writer (after data-analyst completes)
-
-  [Final: research brief with citations, comparison tables, key findings]
+┌─────────────────────────────────────────────────────────────┐
+│                     Next.js Frontend                        │
+│                                                             │
+│  ┌──────────┐  ┌────────────────┐  ┌─────────────────────┐ │
+│  │ Sidebar  │  │   ChatPanel    │  │    TracePanel        │ │
+│  │          │  │                │  │                       │ │
+│  │ Session  │  │ • Messages     │  │ • Nested trace tree  │ │
+│  │ Manager  │  │ • ask_user UI  │  │ • Parallel detection │ │
+│  │          │  │ • Status ticker│  │ • Status indicators  │ │
+│  │          │  │ • Mode toggle  │  │ • Artifact browser   │ │
+│  └──────────┘  └────────────────┘  └─────────────────────┘ │
+│                         │                                    │
+│              StreamConsumer (EventSource SSE)                │
+│              Zustand Store (state management)                │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ SSE text/event-stream
+                          │ REST API (JSON)
+┌─────────────────────────┴───────────────────────────────────┐
+│                     FastAPI Backend                          │
+│                                                             │
+│  Routers:              Services:            Models:         │
+│  • /api/sessions       • AgentSimulator     • AgentEvent    │
+│  • /api/.../messages   • RealAgent          • 12 Payloads   │
+│  • /api/.../stream     • TraceTreeBuilder   • AgentContext   │
+│  • /api/.../answer     • EventEmitter       • AgentStatus   │
+│  • /api/.../artifacts  • ArtifactStore      • Session/Run   │
+│  • /api/.../trace      • AppStore           • Artifact      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**What makes this technically interesting:**
+### Data Flow
 
-- The orchestrator spawns **multiple instances of the same agent type** (`web-researcher`) in parallel — your trace tree must handle multiple nodes with the same agent name but different contexts
-- Sequential-after-parallel: `data-analyst` cannot start until all `web-researcher` instances finish
-- The `ask_user` call happens early (scoping the research), so the pause/resume flow is tested before the heavy parallel phase
-- Rich artifacts at every stage: research notes (per researcher), data summaries, final report
-
-**Existing agents and plugins you can use or adapt:**
-
-| Resource | What it is | Link |
-|----------|-----------|------|
-| **Anthropic's Research Agent Demo** | Official SDK demo with exactly this pattern — lead agent, parallel researchers, data analyst, report writer. Includes hook-based tool tracking with `parent_tool_use_id`. | [anthropics/claude-agent-sdk-demos/research-agent](https://github.com/anthropics/claude-agent-sdk-demos/tree/main/research-agent) |
-| **The One-Liner Research Agent** | Anthropic cookbook showing the simplest possible research agent using `query()` with `WebSearch`. Good for understanding the SDK's stateless query model before building multi-agent. | [platform.claude.com/cookbook](https://platform.claude.com/cookbook/claude-agent-sdk-00-the-one-liner-research-agent) |
-| **wshobson/agents** | 112 specialized agents in 72 plugins. Includes research team agents with parallel investigation capabilities. Look at the "Agent Teams" plugin for multi-agent orchestration patterns. | [wshobson/agents](https://github.com/wshobson/agents) |
-| **claude-code-hooks-multi-agent-observability** | Real-time monitoring for Claude Code agents through hook event tracking. Study this for how to trace tool calls, task handoffs, and agent lifecycle events across a multi-agent run. | [disler/claude-code-hooks-multi-agent-observability](https://github.com/disler/claude-code-hooks-multi-agent-observability) |
-
-**Seed agent prompts (if you build your own plugin):**
-
-You can write your own agents from scratch. Here's the minimum each agent needs:
-
-- `lead-analyst/agent.md` — System prompt instructing it to decompose research requests into 2-4 subtopics and use the `Task` tool to spawn sub-agents. Must include instructions for when to call `ask_user` (ambiguous scope, conflicting priorities, multi-industry topics).
-- `web-researcher/agent.md` — System prompt for focused web research on a single subtopic. Uses `WebSearch` and `Write` to save findings as markdown notes to a known directory.
-- `data-analyst/agent.md` — System prompt for reading research notes (using `Read`, `Glob`), extracting metrics, and generating structured summaries or charts (using `Bash` for chart generation).
-- `report-writer/agent.md` — System prompt for synthesizing all notes and data into a final research brief. Uses `Read`, `Glob`, and `Write`.
-
-The Anthropic research agent demo linked above provides working versions of all four. You can use them directly, adapt them, or write your own.
+1. User sends a message → `POST /api/sessions/{id}/messages`
+2. Backend kicks off agent simulation as a background task
+3. Agent emitter pushes `AgentEvent` dicts into an `asyncio.Queue`
+4. SSE endpoint (`GET /api/sessions/{id}/stream`) drains the queue and yields events
+5. Frontend `StreamConsumer` listens to all 12 event types on one `EventSource`
+6. Each event is routed by `event_type` → state updates in Zustand store
+7. `ChatPanel` and `TracePanel` re-render from the updated store
 
 ---
 
-### Domain B: "PipeForge" — Data Pipeline Builder
+## Tech Stack
 
-**Scenario:** The user describes a data source and the analytics they need. An orchestrator agent builds the full data pipeline — source inspection, staging models, transformations, tests, and documentation. The output is a working set of dbt models, tests, and docs.
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Backend** | Python 3.11+, FastAPI | REST API + SSE streaming |
+| **Frontend** | Next.js 15, React 19, TypeScript | UI framework |
+| **State** | Zustand | Frontend state management |
+| **Styling** | Tailwind CSS 4 | Utility-first CSS |
+| **SSE** | sse-starlette | Server-Sent Events for FastAPI |
+| **AI SDK** | anthropic (Python) | Claude API client (real mode) |
+| **Validation** | Pydantic v2 | Typed event models |
+| **Testing** | pytest, pytest-asyncio, httpx | Backend unit + integration tests |
+| **Markdown** | react-markdown, remark-gfm | Artifact rendering |
 
-**Why this domain works for agent decode:**
+---
 
-Data pipeline construction has a natural sequential-then-parallel structure. You must inspect the source first (you can't build models without knowing the schema), then fan out into parallel work streams (model writing, test writing, doc writing can happen independently). The `ask_user` calls are genuinely useful here — data quality decisions are subjective and require human judgment. The artifacts are heavy and varied: SQL files, YAML configs, test files, markdown docs.
-
-**Agent Architecture:**
-
-| Agent | Role | What it does |
-|-------|------|-------------|
-| `pipeline-architect` | Orchestrator | Receives the data request. Dispatches source inspection first, then fans out model building, test writing, and documentation in parallel. Compiles the final DAG overview. |
-| `source-inspector` | Sub-agent | Examines the raw data source. Profiles columns, infers data types, identifies nulls, duplicates, and quality issues. Writes a source profile report. |
-| `model-builder` | Sub-agent | Reads the source profile. Writes dbt models — staging (1:1 with source), intermediate (business logic), and marts (final analytics tables). |
-| `test-writer` | Sub-agent | Reads the source profile and models. Generates dbt schema tests (not_null, unique, accepted_values, relationships) and custom data quality assertions. |
-| `doc-writer` | Sub-agent | Reads the models and source profile. Writes dbt documentation — model descriptions, column descriptions, and a DAG overview. |
-
-**Execution flow for a typical query:**
+## Project Structure
 
 ```
-User: "Build me a pipeline for our Stripe payments data.
-       I need to track monthly recurring revenue by customer segment."
-
-  ◆ pipeline-architect (running)
-    ... thinking
-    > source-inspector
-      [T] profile_data → { columns: 23, nulls: { amount: 0.3%, currency: 0% } }
-      [?] ask_user: "The `discount_amount` column is 45% null.
-                     Should I: (a) default to 0, (b) exclude discounted rows,
-                     or (c) create a separate model for discounted vs full-price?"
-      ... (paused)
-
-  [User answers: "Default to 0 — treat missing discount as no discount"]
-
-      [T] write_file → source_profile.md
-    > model-builder || parallel
-      [T] write_file → stg_stripe__payments.sql
-      [T] write_file → int_payments__monthly.sql
-      [T] write_file → mart_revenue__by_segment.sql
-    > test-writer || parallel
-      [T] write_file → schema_tests.yml
-      [T] write_file → custom_tests/test_mrr_calculation.sql
-    > doc-writer || parallel
-      [T] write_file → models.md
-
-  [Final: summary of all generated files with the DAG structure]
+├── main.py                          # FastAPI app entry point
+├── requirements.txt                 # Python dependencies
+├── .env                             # ANTHROPIC_API_KEY (for real mode)
+│
+├── app/
+│   ├── models/
+│   │   ├── events.py                # 12 typed event payloads + AgentEvent envelope
+│   │   └── sessions.py              # Session, ChatMessage, Artifact, TraceNode, AgentRun
+│   │
+│   ├── routers/
+│   │   ├── sessions.py              # CRUD: create/list/get/delete sessions
+│   │   ├── chat.py                  # POST message, POST answer
+│   │   ├── stream.py                # SSE endpoint with reconnection replay
+│   │   ├── artifacts.py             # List/get artifacts
+│   │   └── trace.py                 # Get trace tree for a run
+│   │
+│   ├── services/
+│   │   ├── agent_simulator.py       # Mock multi-agent simulation (no API key)
+│   │   ├── real_agent.py            # Real Claude API agent orchestration
+│   │   ├── trace_tree.py            # TraceTreeBuilder: flat events → nested tree
+│   │   ├── event_emitter.py         # Pushes events to asyncio.Queue
+│   │   └── artifact_store.py        # In-memory artifact collection
+│   │
+│   └── store.py                     # Global in-memory state (sessions, queues, prompts)
+│
+├── tests/
+│   ├── test_event_models.py         # All 12 event types: creation + serialization
+│   ├── test_decoder.py              # Event routing + status transitions
+│   ├── test_trace_tree.py           # Tree construction: nesting, parallel, dedup
+│   └── test_api.py                  # API integration: sessions, chat, artifacts
+│
+├── frontend/
+│   ├── app/
+│   │   ├── layout.tsx               # Root layout (Inter + JetBrains Mono fonts)
+│   │   ├── page.tsx                 # Main page (Sidebar + Chat + Trace + Artifact modal)
+│   │   └── globals.css              # Tailwind base + custom scrollbar + animations
+│   │
+│   ├── components/
+│   │   ├── ChatPanel.tsx            # Chat messages, ask_user form, status ticker
+│   │   ├── TracePanel.tsx           # Trace tree with parallel detection + artifact cards
+│   │   ├── StreamConsumer.tsx       # SSE EventSource consumer (routes all 12 event types)
+│   │   └── Sidebar.tsx              # Session list + create
+│   │
+│   ├── lib/
+│   │   ├── store.ts                 # Zustand store (traceNodes, messages, artifacts)
+│   │   ├── api.ts                   # REST + SSE API client
+│   │   └── utils.ts                 # Utility (cn classname helper)
+│   │
+│   └── hooks/
+│       └── use-mobile.ts            # Responsive breakpoint hook
+│
+├── DESIGN.md                        # 1-pager design document
+└── README.md                        # This file
 ```
 
-**What makes this technically interesting:**
+---
 
-- Clear sequential-then-parallel: `source-inspector` must complete before the three parallel agents start
-- The `ask_user` calls happen mid-pipeline on real data quality decisions — not just "which color do you prefer" but "how should I handle 45% null values in a financial column"
-- Very artifact-heavy: each agent produces multiple files, and the trace tree must show which agent created which file
-- The orchestrator's final synthesis references outputs from all sub-agents — tests the "compile after fan-in" pattern
+## Setup Instructions
 
-**Existing agents and plugins you can use or adapt:**
+### Prerequisites
 
-| Resource | What it is | Link |
-|----------|-----------|------|
-| **dbt Labs Agent Skills** | Official dbt agent skills for Claude Code. Covers analytics engineering, unit testing, semantic layer, troubleshooting, and more. Install via Claude Code marketplace. These are skills (instruction sets), not full agents — but they provide the domain knowledge your agents need. | [dbt-labs/dbt-agent-skills](https://github.com/dbt-labs/dbt-agent-skills) |
-| **dbt-model-generator skill** | Community skill specifically for generating dbt models. Good reference for what a model-builder agent should produce. | [awesomeskill.ai/skill/dbt-model-generator](https://awesomeskill.ai/skill/claude-code-plugins-plus-skills-dbt-model-generator) |
-| **Anthropic's Research Agent Demo** | While it's a research domain, the orchestration pattern (lead → parallel sub-agents → synthesis) is identical to what you need. Study the architecture, adapt the domain. | [anthropics/claude-agent-sdk-demos/research-agent](https://github.com/anthropics/claude-agent-sdk-demos/tree/main/research-agent) |
-| **jeremylongshore/claude-code-plugins-plus-skills** | 270+ plugins with 739 skills. Includes data engineering patterns for Airflow, Spark, Kafka, and dbt. Look for orchestration patterns you can adapt. | [jeremylongshore/claude-code-plugins-plus-skills](https://github.com/jeremylongshore/claude-code-plugins-plus-skills) |
-| **Luxor Claude Marketplace** | 140 dev tools including data engineering agents. Check for dbt-adjacent agents and workflows. | [manutej/luxor-claude-marketplace](https://github.com/manutej/luxor-claude-marketplace) |
+- **Python 3.11+** (with `pip`)
+- **Node.js 18+** (with `npm`)
+- **Anthropic API Key** (optional — only needed for "Real API" mode)
 
-**Seed agent prompts (if you build your own plugin):**
+### 1. Backend Setup
 
-- `pipeline-architect/agent.md` — System prompt for decomposing data pipeline requests. Must understand the dbt layer pattern (staging → intermediate → marts). Uses `Task` tool to dispatch sub-agents. Calls `ask_user` when it encounters ambiguous data modeling decisions.
-- `source-inspector/agent.md` — System prompt for data profiling. Uses `Bash` to run profiling queries or scripts, `Write` to save the source profile. Must flag data quality issues and use `ask_user` for decisions that require human judgment (null handling, deduplication strategy, grain selection).
-- `model-builder/agent.md` — System prompt for writing dbt SQL models. Uses `Read` to consume the source profile, `Write` to produce `.sql` files. Should follow dbt naming conventions and include appropriate `ref()` and `source()` macros.
-- `test-writer/agent.md` — System prompt for generating dbt tests. Uses `Read` for source profile and model files, `Write` for schema YAML and custom test SQL.
-- `doc-writer/agent.md` — System prompt for dbt documentation. Uses `Read` for all generated files, `Write` for documentation markdown and YAML descriptions.
+```bash
+# Clone / navigate to the project root
+cd "deep-analyst"
+
+# Create a virtual environment (recommended)
+python -m venv venv
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # macOS/Linux
+
+# Install Python dependencies
+pip install -r requirements.txt
+```
+
+### 2. Frontend Setup
+
+```bash
+cd frontend
+
+# Install Node dependencies
+npm install
+```
+
+### 3. Environment Configuration
+
+Create a `.env` file in the project root:
+
+```env
+ANTHROPIC_API_KEY=your-api-key-here   # Optional: only for "Real API" mode
+```
+
+> **Note:** The application works fully in **Mock mode** without an API key. Mock mode simulates the complete multi-agent flow with realistic events and delays.
 
 ---
 
-## Reference Material
+## Running the Application
 
-These resources will help you understand the SDK concepts you need. You are expected to read them.
+### Start the Backend
 
-| Resource | What you'll learn |
-|----------|------------------|
-| [Claude Agent SDK Overview](https://platform.claude.com/docs/en/agent-sdk/overview) | Core concepts: sessions, tools, streaming, the agent loop |
-| [Subagents in the SDK](https://platform.claude.com/docs/en/agent-sdk/subagents) | How the `Task` tool spawns sub-agents, how `parent_tool_use_id` links events to their parent |
-| [Hooks in the SDK](https://platform.claude.com/docs/en/agent-sdk/hooks) | PreToolUse, PostToolUse hooks for intercepting and tracking agent behavior |
-| [User Input in the SDK](https://platform.claude.com/docs/en/agent-sdk/user-input) | How `ask_user` / `AskUserQuestion` pauses the agent and resumes after user response |
-| [Plugins in the SDK](https://platform.claude.com/docs/en/agent-sdk/plugins) | Plugin directory structure, how plugins are loaded, how agents are namespaced |
-| [Anthropic's SDK Demos Repo](https://github.com/anthropics/claude-agent-sdk-demos) | Working examples: research agent, simple chat app, email agent. Study the research agent closely. |
-| [Claude Agent SDK Python Package](https://github.com/anthropics/claude-agent-sdk-python) | The Python SDK source. Read it if you're building the backend in Python. |
-| [Building Agents with the SDK (Anthropic Blog)](https://www.anthropic.com/engineering/building-agents-with-the-claude-agent-sdk) | Anthropic's own guide to building with the SDK. Good for understanding design philosophy. |
-| [Claude Code Plugins README](https://github.com/anthropics/claude-code/blob/main/plugins/README.md) | How plugins work in Claude Code — structure, installation, namespacing |
-| [Create Custom Subagents (Claude Code Docs)](https://code.claude.com/docs/en/sub-agents) | How to define subagents in Claude Code plugins |
-| [Awesome Claude Code](https://github.com/hesreallyhim/awesome-claude-code) | Curated list of community skills, agents, plugins, hooks. Good for finding patterns to study. |
+```bash
+# From the project root
+uvicorn main:app --reload --port 8000
+```
 
----
+The API will be available at `http://localhost:8000` with interactive docs at `/docs`.
 
-## Technical Requirements (Both Domains)
+### Start the Frontend
 
-### Must-Have (24 hours)
+```bash
+# From the frontend/ directory
+cd frontend
+npm run dev
+```
 
-| # | Requirement |
-|---|-------------|
-| 1 | **Event stream consumer** — Consume the agent event stream in the browser. Handle connection, disconnection, and incremental state building. |
-| 2 | **Agent event decoder** — Route each event type to the correct handler. You need to handle at minimum: session start, thinking, tool start/end, sub-agent start/end, agent response, ask_user, ask_user answered, final message, error, and done. |
-| 3 | **Trace tree builder** — Build a nested tree structure from flat stream events. Events carry agent context (name, role, parent). Use this to place each event under the correct node. |
-| 4 | **Expandable trace panel** — Render the trace tree with expand/collapse. Tool inputs/outputs, thinking text, and response text should be visible on expand. |
-| 5 | **Parallel agent visualization** — When two or more sub-agents run concurrently, the UI must make this visually clear. |
-| 6 | **ask_user flow** — When an agent asks a question, surface it in the chat, collect the user's answer, send it back to the server, and let the stream resume. |
-| 7 | **Chat panel with live status** — The chat panel must never appear idle during a run. Show what's happening. |
-| 8 | **Agent state indicators** — Visual distinction between queued, running, completed, and failed. |
-| 9 | **Artifact collection** — Collect files produced by agents and present them in the final response. |
-| 10 | **Error handling** — Show errors clearly without overwhelming the user. |
+The UI will be available at `http://localhost:3000`.
 
-### Stretch Goals (48 hours)
+### Quick Verification
 
-| # | Requirement |
-|---|-------------|
-| 11 | **Stream reconnection with replay** — If the connection drops, reconnect and resume from the last received event. |
-| 12 | **Auto-collapse completed nodes** — Completed sub-agent nodes collapse to a summary. |
-| 13 | **Multi-run stacking** — Multiple messages in the same session each get their own trace run. Older runs collapse. |
-| 14 | **Retry/Rerun on error** — Recovery actions when an agent fails. |
-| 15 | **Activity ticker** — Real-time status line showing which sub-agent is active and what it's doing. |
-| 16 | **Persistence** — Sessions and trace events survive page refresh. |
+1. Open `http://localhost:3000` in your browser
+2. Create a new session in the sidebar (e.g., "AI Research")
+3. Type a research query (e.g., "Research Anthropic's competitive position in the AI agent framework market")
+4. Watch the trace tree build in real time on the right panel
+5. Answer the clarification question when prompted
+6. View the generated artifacts (research notes, analysis, final report) when the run completes
 
 ---
 
-## What You're Given
+## Usage Guide
 
-**1. Agent plugin** — A Claude Code plugin with the agents pre-defined (or the seed prompts above to build your own). You are also free to use or adapt any of the open-source agents and plugins linked in the domain sections.
+### Mock vs. Real Mode
 
-**2. SDK documentation** — Links provided in the Reference Material section above.
+The input bar includes a **MOCK/REAL_API** toggle button:
 
-**3. Working SDK demo** — The [Anthropic research agent demo](https://github.com/anthropics/claude-agent-sdk-demos/tree/main/research-agent) is a fully working multi-agent system. Even if you pick Domain B, study this demo — the orchestration pattern is the same.
+- **MOCK** (default) — Uses `agent_simulator.py` with pre-scripted events. No API key needed. Runs in ~15 seconds with realistic delays.
+- **REAL_API** — Uses `real_agent.py` with actual Claude (`claude-sonnet-4-20250514`) API calls. Requires `ANTHROPIC_API_KEY` in `.env`. Produces genuinely researched content.
 
----
+### ask_user Flow
 
-## Evaluation Criteria
+When the lead-analyst needs clarification:
+1. An amber "Awaiting Input" card appears in the chat
+2. The trace tree shows the agent with a pulsing amber status
+3. Type your answer and click "Confirm"
+4. The agent resumes and continues execution
 
-| Area | Weight | What we're looking for |
-|------|--------|----------------------|
-| **Architecture** | 30% | Clean separation between stream consumption, state management, and rendering. The backend should normalize raw SDK events into a clean schema before streaming to the browser. |
-| **Agent Decode Correctness** | 30% | Every event type is handled. Events route to the correct agent node. Nested sub-agent events appear under their parent. Parallel agents are distinguished from sequential. The ask_user pause/resume works end-to-end. |
-| **UI/UX Quality** | 20% | The trace tree is readable and navigable. The chat never looks idle. Error states are clear. Artifacts are discoverable. |
-| **Code Quality** | 20% | Typed event shapes (no untyped payloads in the decoder). Clean component structure. Tests for the decoder logic — at minimum, that each event type routes correctly and nested contexts build the right tree shape. |
+### Viewing Artifacts
 
----
+Generated files appear in two places:
+- **Trace Panel** → "Generated Deliverables" section at the bottom
+- **Chat** → Inline artifact links on the final message
 
-## Deliverables
-
-1. **Working application** — Runs locally
-2. **1-pager design document** — Amazon-style (Title, Tenets, Problem, Proposed Solution, Goals, Non-goals, Open Questions). Answer the key design questions: single message or multiple? How do parallel agents appear? What happens during ask_user? How are artifacts surfaced?
-3. **README** — Setup instructions, architecture overview, known limitations
-4. **Decoder tests** — Unit tests proving event routing and tree construction work correctly
+Click any artifact to open it in a full-screen modal with rendered Markdown.
 
 ---
 
+## Agent Execution Flow
 
-## Common Pitfalls
-
-| Pitfall | What goes wrong |
-|---------|----------------|
-| **Treating the stream like a REST call** | You build the full trace tree from a single response instead of incrementally from events. The tree must grow as events arrive. |
-| **Flat event list instead of a tree** | You ignore the parent agent context and render all events as siblings. Sub-agent events must nest under their parent. |
-| **Losing events during ask_user** | You close the stream connection when the agent pauses for user input. The stream stays open — the server just stops emitting until the answer arrives. |
-| **Race conditions on parallel agents** | Two sub-agent events arrive in the same tick and clobber each other's state. |
-| **Hardcoding agent names** | Your rendering logic only works for the specific agents in the plugin. The decoder should work with any agent names — use the context dynamically. |
-| **No early feedback** | The UI shows nothing until the first thinking event arrives. Show the session start immediately so the user knows something is happening. |
+```
+User submits research query
+        │
+        ▼
+◆ lead-analyst (orchestrator)
+│   ├── THINKING: "Analyzing the request..."
+│   ├── ASK_USER: "What angle matters most?"
+│   ├── ... (waiting for user input, stream stays open)
+│   ├── ASK_USER_ANSWERED: user responds
+│   ├── THINKING: "Decomposing into 3 parallel streams..."
+│   │
+│   ├──┬── PARALLEL ──────────────────────────────┐
+│   │  ├── web-researcher #1: "Frameworks landscape"
+│   │  │     THINKING → TOOL web_search → TOOL write_file → RESPONSE
+│   │  ├── web-researcher #2: "Adoption metrics"
+│   │  │     THINKING → TOOL web_search → TOOL write_file → RESPONSE
+│   │  └── web-researcher #3: "Enterprise deployments"
+│   │        THINKING → TOOL web_search → TOOL write_file → RESPONSE
+│   │
+│   ├── data-analyst (sequential, after researchers)
+│   │     THINKING → TOOL glob → TOOL write_file → RESPONSE
+│   │
+│   ├── report-writer (sequential, after data-analyst)
+│   │     THINKING → TOOL read → TOOL write_file → RESPONSE
+│   │
+│   ├── FINAL_MESSAGE: "Research complete! 5 artifacts produced."
+│   └── DONE
+```
 
 ---
 
-## FAQ
+## Event Decoding & Routing
 
-**Q: Can I use either domain's agents from scratch or do I have to use existing plugins?**
-A: Your choice. You can use the Anthropic research agent demo directly, adapt community plugins, or write your own agents from the seed prompts. The capstone evaluates your chat application, not your agent design.
+### Backend: Typed Event Model
 
-**Q: Can I mock the backend during development?**
-A: Yes — a mock event stream that emits pre-recorded events is a great way to build the frontend in isolation. But the final deliverable must connect to a real agent run.
+Every event uses the `AgentEvent` envelope defined in `app/models/events.py`:
 
-**Q: What if I pick Domain B but can't set up dbt locally?**
-A: The agents can write dbt files without a running dbt installation. The pipeline builder produces files — it doesn't need to execute them. If you want the agents to actually run `dbt build`, that's a bonus, not a requirement.
+- **12 event types** as a `str` enum: `session_start`, `thinking`, `tool_start`, `tool_end`, `sub_agent_start`, `sub_agent_end`, `agent_response`, `ask_user`, `ask_user_answered`, `final_message`, `error`, `done`
+- **12 typed Pydantic payload models** — one per event type (e.g., `ThinkingPayload(text: str)`, `ToolStartPayload(tool_use_id, tool_name, input_data)`)
+- **`PAYLOAD_TYPE_MAP`** — dictionary mapping `EventType → PayloadModel` for validation
+- **`AgentContext`** on every event — `agent_id`, `agent_name`, `role`, `parent_agent_id`
 
-**Q: Can I use Python or TypeScript for the backend?**
-A: Either. The Claude Agent SDK is available in both. Pick whichever you're faster in.
+### Backend: Trace Tree Builder
 
-**Q: What frontend framework should I use?**
-A: Your call. React is the most common choice, but Vue, Svelte, or even vanilla JS with a state management library would work. The decoder logic is framework-agnostic.
+`TraceTreeBuilder` in `app/services/trace_tree.py`:
+
+1. Maintains a `dict[str, node]` keyed by `agent_id`
+2. On each event, ensures a node exists for the event's `agent_context.agent_id`
+3. If `parent_agent_id` is set, attaches the node as a child of the parent (with dedup guard)
+4. Updates node `status` based on event type (running → waiting_for_user → running → completed/failed)
+5. Returns the full tree from root via `_serialize_node()` recursion
+
+### Frontend: StreamConsumer
+
+`StreamConsumer.tsx` creates one `EventSource` per active session and registers listeners for all 12 event types. Each listener:
+
+1. Parses the JSON data
+2. Calls `upsertNode()` to ensure the agent exists in the Zustand trace store
+3. Dispatches to type-specific handlers (`addThinking`, `startTool`, `endTool`, etc.)
+4. Updates global state (`isRunning`, `pendingQuestion`, `activeAgentName`)
+
+### Frontend: Parallel Detection
+
+`ChildrenGroup` in `TracePanel.tsx` detects parallel execution by checking:
+- Multiple children with the same `agent_name` (e.g., 3× `web-researcher`)  
+- Multiple siblings with `status: 'running'` simultaneously
+
+Parallel children render inside a violet "Parallel Execution" container.
+
+---
+
+## Testing
+
+### Test Suite
+
+```
+tests/
+├── test_event_models.py    # 16 tests — All 12 event types, serialization round-trip
+├── test_decoder.py         # 11 tests — Event routing, nested contexts, status transitions
+├── test_trace_tree.py      # 9 tests  — Tree construction, parallel, nesting, dedup
+└── test_api.py             # 9 tests  — API integration (sessions, chat, artifacts, answer)
+```
+
+### Running Tests
+
+```bash
+# From the project root (with venv activated)
+python -m pytest tests/ -v
+```
+
+### What the Tests Prove
+
+| Test File | What It Covers |
+|-----------|---------------|
+| `test_event_models.py` | Every event type can be instantiated with its typed payload. JSON round-trip serialization preserves all fields. Auto-generated `event_id` and `timestamp` are populated. |
+| `test_decoder.py` | All 12 event types route to the correct node. Multi-level nesting (root → child → grandchild) places events correctly. Parallel siblings don't cross-contaminate. Status transitions: `running → waiting_for_user → running → completed`, `running → failed`. |
+| `test_trace_tree.py` | Single root node creation. Parent-child nesting. 3 parallel children are all attached to the same parent. Events accumulate on the correct node (not siblings). No duplicate children when the same agent sends multiple events. Deep nesting (3 levels). `get_flat_nodes()` returns all nodes. |
+| `test_api.py` | Session CRUD (create, list, get, delete, 404). Send message returns `run_id`. Get messages retrieves history. Answer prompt updates state. Unknown prompt returns 404. Empty artifact list. Artifact 404. |
+
+---
+
+## Known Limitations
+
+| # | Limitation | Impact | Mitigation |
+|---|-----------|--------|-----------|
+| 1 | **In-memory storage only** | All sessions, runs, events, and artifacts are lost on server restart | Acceptable for capstone scope. A production system would use PostgreSQL + Redis. |
+| 2 | **No stream reconnection replay** | If the browser disconnects mid-run, events are missed | The `Last-Event-ID` header and event log infrastructure exists but is not fully battle-tested. The `/trace` endpoint allows fetching the current tree state on reconnect. |
+| 3 | **No multi-user support** | Single shared in-memory state | Single-user local dev tool by design. |
+| 4 | **Trace panel shows only the latest run** | Previous runs in the same session are not visible in the trace tree | Users can review chat history, but trace details of older runs are not surfaced. |
+| 5 | **Mock mode produces static content** | Research notes and reports are pre-written, not generated | Use "Real API" mode for genuine research output. Mock mode is for UI development and testing. |
+| 6 | **No artifact persistence** | Artifacts exist only in memory during the session's lifetime | Artifacts could be written to disk or a blob store in production. |
+| 7 | **Real mode requires Anthropic API key** | Cannot use real mode without a paid API key | Mock mode provides the full UI experience without cost. |
+| 8 | **No retry/rerun on error** | If an agent fails, the user must send a new message | Stretch goal. The `ErrorPayload.recoverable` field exists but no retry logic is implemented. |
